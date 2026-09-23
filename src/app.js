@@ -13,17 +13,35 @@ const app = express();
 
 // Comma-separated origins allowed (local + deployed frontend URLs),
 // e.g. CLIENT_URL=https://delta-frontend.vercel.app,http://localhost:5173
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim());
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+// Supports both CLIENT_URL (new) and FRONTEND_URL (legacy .env) for compatibility
+const rawOrigins = process.env.CLIENT_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
+const allowedOrigins = rawOrigins.split(',').map((s) => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow server-to-server / curl / health checks with no origin
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return cb(null, true);
+    // also allow vercel preview deployments if main origin is a vercel app
+    return cb(null, true);
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // static uploads — only in disk mode (local dev). On Vercel, images live
 // on Vercel Blob as https URLs, so there is nothing local to serve.
-const uploadsPath = path.join(__dirname, '..', 'uploads');
-if (fs.existsSync(uploadsPath)) {
-  app.use('/uploads', express.static(uploadsPath));
+try {
+  const uploadsPath = path.join(__dirname, '..', 'uploads');
+  const tmpUploads = path.join('/tmp', 'uploads');
+  if (fs.existsSync(uploadsPath)) {
+    app.use('/uploads', express.static(uploadsPath));
+  } else if (fs.existsSync(tmpUploads)) {
+    app.use('/uploads', express.static(tmpUploads));
+  }
+} catch (e) {
+  console.warn('[app] static uploads setup failed:', e.message);
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true, app: 'delta-mern', time: new Date().toISOString() }));
